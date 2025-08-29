@@ -185,15 +185,28 @@ pub(crate) fn load_sparse_r1cs_from_file<R: Read + Send>(
 }
 
 /// load_witness_from_file
+// pub fn load_witness_from_file(witness_file_path: &str) -> Vec<Fr> {
+//     let f = File::open(witness_file_path).unwrap();
+//     let mut src = BufReader::new(f);
+//     let mut warr = Vector::default();
+//     warr.read_from(&mut src).unwrap();
+//     let wit_fr: Vec<Fr> = warr
+//         .into_par_iter()
+//         .map(|w| gnark_element_to_fr(&w))
+//         .collect();
+//     wit_fr
+// }
+
 pub fn load_witness_from_file(witness_file_path: &str) -> Vec<Fr> {
     let f = File::open(witness_file_path).unwrap();
     let mut src = BufReader::new(f);
-    let mut warr = Vector::default();
-    warr.read_from(&mut src).unwrap();
-    let wit_fr: Vec<Fr> = warr
-        .into_par_iter()
-        .map(|w| gnark_element_to_fr(&w))
-        .collect();
+    let mut wit_fr = Vec::new();
+    let mut buf = [0u8; 32];
+
+    while src.read_exact(&mut buf).is_ok() {
+        let fr = Fr::from_be_bytes_mod_order(&buf);
+        wit_fr.push(fr);
+    }
     wit_fr
 }
 

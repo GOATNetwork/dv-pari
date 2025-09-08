@@ -180,72 +180,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn test_dvsnark_prover_over_sp1_r1cs() {
-        let cache_dir = "srs_secu";
-        let now = Instant::now();
-        let num_public_inputs = 2;
-
-        // Load witness from file dumped by sp1 gnark
-        // Witness is known to have the format [1, ...public_inputs, ...private_inputs]
-        let wit_fr: Vec<Fr> = load_witness_from_file(&format!("{cache_dir}/{R1CS_WITNESS_FILE}"));
-        assert_eq!(wit_fr[0], Fr::ONE);
-        let priv_fr = wit_fr[1 + num_public_inputs..].to_vec();
-        let public_inputs = wit_fr[1..1 + num_public_inputs].to_vec();
-
-        let mut rng = ChaCha20Rng::seed_from_u64(41);
-
-        let elapsed = now.elapsed();
-        println!("Took {} seconds to load R1CS witness", elapsed.as_secs());
-        let now = Instant::now();
-
-        let trapdoor = Trapdoor {
-            tau: Fr::rand(&mut rng),
-            delta: Fr::rand(&mut rng),
-            epsilon: Fr::rand(&mut rng),
-        };
-
-        // verifier runs setup assuming `artifacts::DOMAIN_SPECIFIC_PRECOMPUTES` are present inside `cache_dir`
-        let _ = SRS::verifier_runs_setup(
-            trapdoor,
-            Path::new(cache_dir),
-            num_public_inputs,
-            false,
-            false,
-        )
-        .unwrap();
-
-        let elapsed = now.elapsed();
-        println!("Took {} seconds to setup SRS", elapsed.as_secs());
-
-        // prover generates precomputes and also downloads `artifacts::DOMAIN_SPECIFIC_PRECOMPUTES` inside his `cache_dir`
-        let now = Instant::now();
-        prover_prepares_precomputes(cache_dir, false).unwrap();
-        let elapsed = now.elapsed();
-        println!("Took {} seconds to precompute SRS", elapsed.as_secs());
-
-        let now = Instant::now();
-        // prover generates proof
-        let proof = Proof::prove(cache_dir, public_inputs.clone(), &priv_fr);
-
-        let elapsed = now.elapsed();
-        println!("Took {} seconds to generate proof", elapsed.as_secs());
-        let now = Instant::now();
-
-        // Designated verifier verifies proof
-        let result = SRS::verify(trapdoor, &public_inputs, &proof);
-        let elapsed = now.elapsed();
-        println!("Took {} seconds to verify proof", elapsed.as_secs());
-
-        assert!(
-            result,
-            "Verification should succeed for valid multi-constraint witness"
-        );
-    }
-
-    #[test]
     fn test_gnark_r1cs() {
-        let cache_dir = "srs_gnark";
+        let cache_dir = "groth16";
 
         let now = Instant::now();
         let num_public_inputs = 2;

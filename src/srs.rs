@@ -1,5 +1,7 @@
 //! Setup Phase and Proof Verification
 //!
+
+// use std::cmp::max;
 use crate::artifacts::{
     BAR_WTS, BAR_WTSD, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q,
     TREE_2N, TREE_2ND, TREE_N, TREE_ND, Z_POLY, Z_POLYD, Z_VALS2_INV, Z_VALS2D_INV,
@@ -191,6 +193,29 @@ impl SRS {
             .unwrap();
             R1CSInstance::from_dump(dump.clone(), num_public_inputs)
         };
+
+        // let mut res = 0;
+        // let mut max_term_len = 0;
+        // for i in 0..inst.rows.len() {
+        //     let mut tmp = 0;
+        //     tmp += inst.rows[i].l.len();
+        //     tmp += inst.rows[i].r.len();
+        //     tmp += inst.rows[i].o.len();
+        //     max_term_len = max(max_term_len, tmp);
+        //     for j in 0..inst.rows[i].l.len() {
+        //         res = max(res, inst.rows[i].l[j].wire_id as usize);
+        //     }
+        //     for j in 0..inst.rows[i].r.len() {
+        //         res = max(res, inst.rows[i].r[j].wire_id as usize);
+        //     }
+        // 
+        //     for j in 0..inst.rows[i].o.len() {
+        //         res = max(res, inst.rows[i].o[j].wire_id as usize);
+        //     }
+        // }
+        // 
+        // println!("Max wire id: {}", res);
+        // println!("Max term length in a constraint: {}", max_term_len);
 
         let num_constraints = inst.num_constraints;
         let n_log = num_constraints.ilog2() as usize;

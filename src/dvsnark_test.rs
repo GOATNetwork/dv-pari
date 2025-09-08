@@ -220,7 +220,7 @@ mod tests {
 
         // prover generates precomputes and also downloads `artifacts::DOMAIN_SPECIFIC_PRECOMPUTES` inside his `cache_dir`
         let now = Instant::now();
-        prover_prepares_precomputes(cache_dir, false).unwrap();
+        prover_prepares_precomputes(cache_dir, true).unwrap();
         let elapsed = now.elapsed();
         println!("Took {} seconds to precompute SRS", elapsed.as_secs());
 

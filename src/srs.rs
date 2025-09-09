@@ -28,6 +28,7 @@ use ecfft::utils::BinaryTree;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::fs::File;
 use std::path::Path;
+use rayon::join;
 
 /// Structured Reference String
 #[derive(Clone, Debug)]
@@ -217,38 +218,15 @@ impl SRS {
         std::fs::create_dir_all(cache_dir) // ensure directory exists
             .with_context(|| format!("creating {}", cache_dir.display()))?;
         let now = std::time::Instant::now();
-        // take about 50secs to load from file.
+
         let mut inst = {
             let dump = load_sparse_r1cs_from_file(
                 File::open(cache_dir.join(R1CS_CONSTRAINTS_FILE)).unwrap(),
             )
             .unwrap();
-            R1CSInstance::from_dump(dump.clone(), num_public_inputs)
+            R1CSInstance::from_dump(dump, num_public_inputs)
         };
         println!("Took {:?} secs to load R1CS", now.elapsed().as_secs_f32());
-
-        // let mut res = 0;
-        // let mut max_term_len = 0;
-        // for i in 0..inst.rows.len() {
-        //     let mut tmp = 0;
-        //     tmp += inst.rows[i].l.len();
-        //     tmp += inst.rows[i].r.len();
-        //     tmp += inst.rows[i].o.len();
-        //     max_term_len = max(max_term_len, tmp);
-        //     for j in 0..inst.rows[i].l.len() {
-        //         res = max(res, inst.rows[i].l[j].wire_id as usize);
-        //     }
-        //     for j in 0..inst.rows[i].r.len() {
-        //         res = max(res, inst.rows[i].r[j].wire_id as usize);
-        //     }
-        // 
-        //     for j in 0..inst.rows[i].o.len() {
-        //         res = max(res, inst.rows[i].o[j].wire_id as usize);
-        //     }
-        // }
-        // 
-        // println!("Max wire id: {}", res);
-        // println!("Max term length in a constraint: {}", max_term_len);
 
         let num_constraints = inst.num_constraints;
         let n_log = num_constraints.ilog2() as usize;
@@ -357,17 +335,31 @@ impl SRS {
             };
 
         let now = std::time::Instant::now();
-        let (mut treen, l_tau, z_poly) =
-            init_tree_and_poly_at_tau(TREE_2N, TREE_N, Z_POLY, BAR_WTS, false)?;
-        println!("Took {:?} secs to init_tree_and_poly_at_tau D", now.elapsed().as_secs_f32());
+        let (res_d, res_dp) = join(
+            || init_tree_and_poly_at_tau(TREE_2N, TREE_N, Z_POLY, BAR_WTS, false),
+            || init_tree_and_poly_at_tau(TREE_2ND, TREE_ND, Z_POLYD, BAR_WTSD, true),
+        );
 
-        // drop treen to save memory, will read from file in a couple of steps
-        // clear_fftree(&mut treen);
+        let (mut treen, l_tau, z_poly) = res_d?;
+        println!(
+            "Took {:?} secs to init_tree_and_poly_at_tau D",
+            now.elapsed().as_secs_f32()
+        );
 
+        let (mut treend, l_taud, z_polyd) = res_dp?;
+        println!(
+            "Took {:?} secs to init_tree_and_poly_at_tau D'",
+            now.elapsed().as_secs_f32()
+        );
+
+        println!("r1cs update_to_include_vandermode_matrix_d");
         let now = std::time::Instant::now();
-        let (mut treend, l_taud, z_polyd) =
-            init_tree_and_poly_at_tau(TREE_2ND, TREE_ND, Z_POLYD, BAR_WTSD, true)?;
-        println!("Took {:?} secs to init_tree_and_poly_at_tau D'", now.elapsed().as_secs_f32());
+        R1CSInstance::update_to_include_vandermode_matrix_d(
+            &mut inst,
+            treen.f.leaves(),
+            num_public_inputs,
+        );
+        println!("Took {:?} secs to update r1cs", now.elapsed().as_secs_f32());
 
         // Pre‑compute domain vanishing polynomials and their inverses ---------
         let prepare_z_inv =
@@ -384,35 +376,16 @@ impl SRS {
                 }
             };
 
-        println!("computing evaluations of vanishing polynomial on other domain");
-        let now = std::time::Instant::now();
-        let mut z_vals2_inv = prepare_z_inv(Z_VALS2_INV, &z_poly, &treend)?;
-        println!("Took {:?} secs to prepare_z_inv D'", now.elapsed().as_secs_f32());
-        clear_fftree(&mut treend);
-
-        // // rebuild tree now that some space has been freed
-        // let now = std::time::Instant::now();
-        // treen = if is_fresh_setup {
-        //     let tree = load_tree(TREE_2N, false, num_constraints * 2).unwrap();
-        //     let tree: FFTree<Fr> = tree.subtree_with_size(num_constraints).clone();
-        //     tree
-        // } else {
-        //     load_tree(TREE_N, false, num_constraints).unwrap()
-        // };
-        // println!("Took {:?} secs to reload treen", now.elapsed().as_secs_f32());
-
-        println!("r1cs update_to_include_vandermode_matrix_d");
-        let now = std::time::Instant::now();
-        R1CSInstance::update_to_include_vandermode_matrix_d(
-            &mut inst,
-            treen.f.leaves(),
-            num_public_inputs,
+        let (res_zvals2_inv, res_zvals2d_inv) = join(
+            || prepare_z_inv(Z_VALS2_INV, &z_poly, &treend),
+            || prepare_z_inv(Z_VALS2D_INV, &z_polyd, &treen),
         );
-        println!("Took {:?} secs to update r1cs", now.elapsed().as_secs_f32());
-
-        let now = std::time::Instant::now();
-        let mut z_vals2d_inv = prepare_z_inv(Z_VALS2D_INV, &z_polyd, &treen)?;
+        let mut z_vals2_inv = res_zvals2_inv?;
+        println!("Took {:?} secs to prepare_z_inv D'", now.elapsed().as_secs_f32());
+        let mut z_vals2d_inv = res_zvals2d_inv?;
         println!("Took {:?} secs to prepare_z_inv D", now.elapsed().as_secs_f32());
+        
+        clear_fftree(&mut treend);
         clear_fftree(&mut treen);
 
         println!("evaluate_lagrage_over_unified_domain_with_precompute");

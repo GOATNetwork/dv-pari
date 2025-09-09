@@ -23,7 +23,7 @@ use blake3::Hasher;
 use num_bigint::BigUint;
 use rayon::{
     iter::{IntoParallelIterator, ParallelIterator},
-    scope,
+    prelude::*,
 };
 use std::{
     fs::File,
@@ -118,7 +118,7 @@ pub(crate) struct SparseR1CSTable {
 }
 
 /// Parse a gnark SP‑1 sparse‑R1CS dump from a file
-pub(crate) fn load_sparse_r1cs_from_file<R: Read + Send>(
+pub(crate) fn load_sparse_r1cs_from_file<R: Read>(
     mut reader: R,
 ) -> io::Result<SparseR1CSTable> {
     // ───────── 1. coefficients (exactly n_coeffs × 32 bytes) ─────────────
@@ -132,51 +132,42 @@ pub(crate) fn load_sparse_r1cs_from_file<R: Read + Send>(
 
     // ───────── 2. rows: read metadata & bytes serially, parse in parallel ─
     let n_rows = reader.read_u32::<LittleEndian>()? as usize;
-    let mut rows = vec![
-        Row {
-            l: vec![],
-            r: vec![],
-            o: vec![]
-        };
-        n_rows
-    ]; // placeholder
+    let mut raw_rows = Vec::with_capacity(n_rows);
 
-    scope(|s| {
-        for slot in &mut rows {
-            // Read counts for this row
-            let n_l = reader.read_u32::<LittleEndian>().unwrap() as usize;
-            let n_r = reader.read_u32::<LittleEndian>().unwrap() as usize;
-            let n_o = reader.read_u32::<LittleEndian>().unwrap() as usize;
-            let term_count = n_l + n_r + n_o;
+    for _ in 0..n_rows {
+        let n_l = reader.read_u32::<LittleEndian>()? as usize;
+        let n_r = reader.read_u32::<LittleEndian>()? as usize;
+        let n_o = reader.read_u32::<LittleEndian>()? as usize;
+        let term_count = n_l + n_r + n_o;
 
-            // Read exactly term_count × 8 bytes
-            let mut buf = vec![0u8; term_count * 8];
-            reader.read_exact(&mut buf).unwrap();
+        let mut buf = vec![0u8; term_count * 8];
+        reader.read_exact(&mut buf)?;
 
-            // Kick a worker that parses this row’s buffer
-            s.spawn(move |_| {
-                // Helper to parse n terms from &mut slice, advancing cursor
-                fn take_terms(chunk: &mut &[u8], n: usize) -> Vec<Term> {
-                    (0..n)
-                        .map(|_| {
-                            let wire_id = u32::from_le_bytes(chunk[..4].try_into().unwrap());
-                            let coeff_id = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
-                            *chunk = &chunk[8..];
-                            Term { wire_id, coeff_id }
-                        })
-                        .collect()
-                }
+        raw_rows.push((n_l, n_r, n_o, buf));
+    }
 
-                let mut slice: &[u8] = &buf;
-                let l = take_terms(&mut slice, n_l);
-                let r = take_terms(&mut slice, n_r);
-                let o = take_terms(&mut slice, n_o);
+    // parse rows
+    let rows: Vec<Row> = raw_rows
+        .into_par_iter()
+        .map(|(n_l, n_r, n_o, mut buf)| {
+            fn take_terms(chunk: &mut &[u8], n: usize) -> Vec<Term> {
+                (0..n)
+                    .map(|_| {
+                        let wire_id = u32::from_le_bytes(chunk[..4].try_into().unwrap());
+                        let coeff_id = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
+                        *chunk = &chunk[8..];
+                        Term { wire_id, coeff_id }
+                    })
+                    .collect()
+            }
 
-                // SAFETY: this slot is unique to the current iteration
-                *slot = Row { l, r, o };
-            });
-        }
-    });
+            let mut slice: &[u8] = &buf;
+            let l = take_terms(&mut slice, n_l);
+            let r = take_terms(&mut slice, n_r);
+            let o = take_terms(&mut slice, n_o);
+            Row { l, r, o }
+        })
+        .collect();
 
     Ok(SparseR1CSTable {
         coeff_table,

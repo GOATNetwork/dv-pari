@@ -23,7 +23,6 @@ use blake3::Hasher;
 use num_bigint::BigUint;
 use rayon::{
     iter::{IntoParallelIterator, ParallelIterator},
-    prelude::*,
 };
 use std::{
     fs::File,
@@ -149,7 +148,7 @@ pub(crate) fn load_sparse_r1cs_from_file<R: Read>(
     // parse rows
     let rows: Vec<Row> = raw_rows
         .into_par_iter()
-        .map(|(n_l, n_r, n_o, mut buf)| {
+        .map(|(n_l, n_r, n_o, buf)| {
             fn take_terms(chunk: &mut &[u8], n: usize) -> Vec<Term> {
                 (0..n)
                     .map(|_| {

@@ -11,7 +11,7 @@ mod tests {
     use std::fs::File;
     use crate::artifacts::{R1CS_CONSTRAINTS_FILE, R1CS_WITNESS_FILE};
     use crate::curve::Fr;
-    use crate::proving::{Proof, prover_prepares_precomputes};
+    use crate::proving::{Proof, prover_prepares_precomputes, dump_proof_to_file, read_proof_from_file};
     use anyhow::Context;
     use ark_ff::Field;
     use ark_std::vec::Vec;
@@ -170,6 +170,12 @@ mod tests {
         // Prover generates proof
         let proof = Proof::prove("srs_verifier_small_tmp", public_inputs.clone(), &witness);
 
+        let proof_path = &Path::new(cache_dir).join("dv-proof");
+        dump_proof_to_file(&proof, &proof_path.to_str().unwrap()).unwrap();
+        println!("Dumped proof to {}", &proof_path.to_str().unwrap());
+
+        let proof = read_proof_from_file(&proof_path.to_str().unwrap()).unwrap();
+
         // Designated verifier verifies proof
         let public_inputs: Vec<Fr> = vec![o, w];
         let result = SRS::verify(trapdoor, &public_inputs, &proof);
@@ -227,9 +233,14 @@ mod tests {
         let now = Instant::now();
         // prover generates proof
         let proof = Proof::prove(cache_dir, public_inputs.clone(), &priv_fr);
-
         let elapsed = now.elapsed();
         println!("Took {} seconds to generate proof", elapsed.as_secs());
+
+        let proof_path = &Path::new(cache_dir).join("dv-proof");
+        dump_proof_to_file(&proof, &proof_path.to_str().unwrap()).unwrap();
+        println!("Dumped proof to {}", &proof_path.to_str().unwrap());
+        let proof = read_proof_from_file(&proof_path.to_str().unwrap()).unwrap();
+
         let now = Instant::now();
 
         // Designated verifier verifies proof
@@ -241,5 +252,7 @@ mod tests {
             result,
             "Verification should succeed for valid multi-constraint witness"
         );
+
+
     }
 }

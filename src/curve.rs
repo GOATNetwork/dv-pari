@@ -11,6 +11,7 @@ use rayon::iter::{
 use std::os::raw::c_void;
 use std::str::FromStr;
 use xs233_sys::{xsk233_add, xsk233_generator, xsk233_neutral, xsk233_point};
+use serde::{Serialize, Deserialize};
 
 /// FqConfig for Scalar Field of the curve
 #[derive(MontConfig, Debug)]
@@ -24,6 +25,39 @@ pub type Fr = Fp256<MontBackend<FqConfig, 4>>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// 232-bit Serialized Fr
 pub struct FrBits(pub [bool; 232]);
+
+impl Serialize for FrBits {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Pack bits into 29 bytes (232 bits = 29 * 8)
+        let mut bytes = [0u8; 29];
+        for (i, bit) in self.0.iter().enumerate() {
+            if *bit {
+                bytes[i / 8] |= 1 << (i % 8);
+            }
+        }
+        serializer.serialize_bytes(&bytes)
+    }
+}
+
+impl<'de> Deserialize<'de> for FrBits {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bytes: Vec<u8> = serde::Deserialize::deserialize(deserializer)?;
+        if bytes.len() != 29 {
+            return Err(serde::de::Error::custom("expected 29 bytes"));
+        }
+        let mut bits = [false; 232];
+        for i in 0..232 {
+            bits[i] = (bytes[i / 8] >> (i % 8)) & 1 == 1;
+        }
+        Ok(FrBits(bits))
+    }
+}
 
 impl FrBits {
     /// serialize fr

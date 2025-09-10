@@ -23,6 +23,7 @@ use ark_ff::{Field, One, Zero};
 use ark_poly::Polynomial;
 use ark_poly::univariate::DensePolynomial;
 use ark_std::vec::Vec;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ecfft::FFTree;
 use ecfft::utils::BinaryTree;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -42,7 +43,7 @@ pub struct SRS {
 }
 
 /// Trapdoor only known to the verifier
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, CanonicalSerialize, CanonicalDeserialize)]
 pub struct Trapdoor {
     /// tau
     pub tau: Fr,

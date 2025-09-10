@@ -8,7 +8,6 @@
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
     use crate::artifacts::{R1CS_CONSTRAINTS_FILE, R1CS_WITNESS_FILE};
     use crate::curve::Fr;
     use crate::proving::{Proof, prover_prepares_precomputes, dump_proof_to_file, read_proof_from_file};
@@ -17,18 +16,21 @@ mod tests {
     use ark_std::vec::Vec;
     use std::path::Path;
 
-    use crate::gnark_r1cs::{load_sparse_r1cs_from_file, load_witness_from_file, write_sparse_r1cs_to_file, R1CSInstance};
+    use crate::gnark_r1cs::{load_witness_from_file, write_sparse_r1cs_to_file};
 
     use crate::gnark_r1cs::{Row, SparseR1CSTable, Term};
     use crate::srs::{SRS, Trapdoor};
 
     use ark_std::rand::SeedableRng;
+    use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
     use rand_chacha::ChaCha20Rng;
     use std::time::Instant;
 
     use ark_ff::UniformRand;
     use ark_ff::{BigInteger, PrimeField};
+    use std::fs::File;
+    use std::io::Write;
 
     // dump toy constraints
     fn create_five_constraint_dump_on_a_file(cache_dir: &Path) {
@@ -199,6 +201,11 @@ mod tests {
         let priv_fr = wit_fr[1 + num_public_inputs..].to_vec();
         let public_inputs = wit_fr[1..1 + num_public_inputs].to_vec();
 
+        let mut buf = Vec::new();
+        public_inputs.serialize_compressed(&mut buf).unwrap();  // or serialize_uncompressed
+        let mut file = File::create("groth16/public_inputs.bin").unwrap();
+        file.write_all(&buf).unwrap();
+
         let mut rng = ChaCha20Rng::seed_from_u64(41);
 
         let elapsed = now.elapsed();
@@ -210,6 +217,10 @@ mod tests {
             delta: Fr::rand(&mut rng),
             epsilon: Fr::rand(&mut rng),
         };
+
+        let mut buf = Vec::new();
+        trapdoor.serialize_compressed(&mut buf).unwrap();
+        std::fs::write("groth16/trapdoor.bin", &buf).unwrap();
 
         // verifier runs setup assuming `artifacts::DOMAIN_SPECIFIC_PRECOMPUTES` are present inside `cache_dir`
         let _ = SRS::verifier_runs_setup(
@@ -245,6 +256,7 @@ mod tests {
 
         // Designated verifier verifies proof
         let result = SRS::verify(trapdoor, &public_inputs, &proof);
+
         let elapsed = now.elapsed();
         println!("Took {} seconds to verify proof", elapsed.as_secs());
 

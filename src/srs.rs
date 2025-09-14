@@ -1,5 +1,7 @@
 //! Setup Phase and Proof Verification
 //!
+
+// use std::cmp::max;
 use crate::artifacts::{
     BAR_WTS, BAR_WTSD, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q,
     TREE_2N, TREE_2ND, TREE_N, TREE_ND, Z_POLY, Z_POLYD, Z_VALS2_INV, Z_VALS2D_INV,
@@ -21,11 +23,13 @@ use ark_ff::{Field, One, Zero};
 use ark_poly::Polynomial;
 use ark_poly::univariate::DensePolynomial;
 use ark_std::vec::Vec;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ecfft::FFTree;
 use ecfft::utils::BinaryTree;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::fs::File;
 use std::path::Path;
+use rayon::join;
 
 /// Structured Reference String
 #[derive(Clone, Debug)]
@@ -39,7 +43,7 @@ pub struct SRS {
 }
 
 /// Trapdoor only known to the verifier
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, CanonicalSerialize, CanonicalDeserialize)]
 pub struct Trapdoor {
     /// tau
     pub tau: Fr,
@@ -122,42 +126,73 @@ fn compute_srs_matrices(
     let z_tau = z_poly_ark.evaluate(&tau);
     let delta2 = delta.square();
 
-    // g_m -------------------------------------------------------------------
-    let g_m: Vec<CurvePoint> = {
-        let m_vals = accumulate_m_values(&inst.rows, &inst.coeffs, l_tau, delta);
-        inst.rows.clear();
-        inst.coeffs.clear();
-        m_vals
-            .into_par_iter()
-            .map(|val| point_scalar_mul_gen(val * secrets.epsilon))
-            .collect()
-    };
-    write_point_vec_to_file(cache_dir.join(SRS_G_M), &g_m)?;
+    // parallelize g_m, g_q, g_k
+    let (g_m, (g_q, g_k_vecs)) = rayon::join(
+        || {
+            let now = std::time::Instant::now();
+            let m_vals = accumulate_m_values(&inst.rows, &inst.coeffs, l_tau, delta);
+            inst.rows.clear();
+            inst.coeffs.clear();
+            let g_m: Vec<CurvePoint> = m_vals
+                .into_par_iter()
+                .map(|val| point_scalar_mul_gen(val * secrets.epsilon))
+                .collect();
+            println!("Took {:?} secs to compute g_m", now.elapsed().as_secs_f32());
+            let now = std::time::Instant::now();
+            write_point_vec_to_file(cache_dir.join(SRS_G_M), &g_m).unwrap();
+            println!("Took {:?} secs to write g_m", now.elapsed().as_secs_f32());
+            g_m
+        },
+        || {
+            rayon::join(
+                || {
+                    let now = std::time::Instant::now();
+                    let g_q: Vec<CurvePoint> = (0..inst.num_constraints)
+                        .into_par_iter()
+                        .map(|i| {
+                            let scalar = z_tau * delta2 * l_taud[i] * secrets.epsilon;
+                            point_scalar_mul_gen(scalar)
+                        })
+                        .collect();
 
-    // g_q -------------------------------------------------------------------
-    let g_q: Vec<CurvePoint> = (0..inst.num_constraints)
-        .into_par_iter()
-        .map(|i| {
-            let scalar = z_tau * delta2 * l_taud[i] * secrets.epsilon;
-            point_scalar_mul_gen(scalar)
-        })
-        .collect();
-    write_point_vec_to_file(cache_dir.join(SRS_G_Q), &g_q)?;
+                    println!("Took {:?} secs to compute g_q", now.elapsed().as_secs_f32());
+                    let now = std::time::Instant::now();
+                    write_point_vec_to_file(cache_dir.join(SRS_G_Q), &g_q).unwrap();
+                    println!("Took {:?} secs to write g_q", now.elapsed().as_secs_f32());
+                    g_q
+                },
+                || {
+                    let delta_pows = [Fr::one(), delta, delta2];
+                    const SRS_GK: [&str; 3] = [SRS_G_K_0, SRS_G_K_1, SRS_G_K_2];
 
-    // g_k vectors ------------------------------------------------------------
-    let delta_pows = [Fr::one(), delta, delta2];
-    let mut g_k_vecs: [Vec<CurvePoint>; 3] = Default::default();
-    const SRS_GK: [&str; 3] = [SRS_G_K_0, SRS_G_K_1, SRS_G_K_2];
-    for (j, g_k) in g_k_vecs.iter_mut().enumerate() {
-        let path = cache_dir.join(SRS_GK[j]);
-        let l_slice = if j < 2 { l_tau } else { l_taul };
+                    std::array::from_fn(|j| {
+                        let now = std::time::Instant::now();
+                        let path = cache_dir.join(SRS_GK[j]);
+                        let l_slice = if j < 2 { l_tau } else { l_taul };
 
-        *g_k = l_slice
-            .into_par_iter()
-            .map(|l_val| point_scalar_mul_gen(*l_val * delta_pows[j]))
-            .collect();
-        write_point_vec_to_file(path, g_k)?;
-    }
+                        let vec: Vec<CurvePoint> = l_slice
+                            .into_par_iter()
+                            .map(|l_val| point_scalar_mul_gen(*l_val * delta_pows[j]))
+                            .collect();
+
+                        println!(
+                            "Took {:?} secs to compute g_k_{}",
+                            now.elapsed().as_secs_f32(),
+                            j
+                        );
+                        let now = std::time::Instant::now();
+                        write_point_vec_to_file(path, &vec).unwrap();
+                        println!(
+                            "Took {:?} secs to write g_k_{}",
+                            now.elapsed().as_secs_f32(),
+                            j
+                        );
+                        vec
+                    })
+                },
+            )
+        },
+    );
 
     Ok(SRSMatrices {
         g_m,
@@ -183,14 +218,16 @@ impl SRS {
     ) -> Result<Self> {
         std::fs::create_dir_all(cache_dir) // ensure directory exists
             .with_context(|| format!("creating {}", cache_dir.display()))?;
+        let now = std::time::Instant::now();
 
         let mut inst = {
             let dump = load_sparse_r1cs_from_file(
                 File::open(cache_dir.join(R1CS_CONSTRAINTS_FILE)).unwrap(),
             )
             .unwrap();
-            R1CSInstance::from_dump(dump.clone(), num_public_inputs)
+            R1CSInstance::from_dump(dump, num_public_inputs)
         };
+        println!("Took {:?} secs to load R1CS", now.elapsed().as_secs_f32());
 
         let num_constraints = inst.num_constraints;
         let n_log = num_constraints.ilog2() as usize;
@@ -221,7 +258,10 @@ impl SRS {
              odd_leaf|
              -> Result<(FFTree<Fr>, Vec<Fr>, DensePolynomial<Fr>)> {
                 let (treen, vanishing_poly) = if is_fresh_setup {
+                    let now = std::time::Instant::now();
                     let tree = load_tree(tree2nf, odd_leaf, num_constraints * 2).unwrap();
+                    println!("Took {:?} secs to load_tree  //2nf", now.elapsed().as_secs_f32());
+                    let now = std::time::Instant::now();
                     let vanish_poly: DensePolynomial<Fr> = if cache_dir.join(zpolyf).exists() {
                         // read cached file if it exists from previous run
                         let zpoly_coeff = read_fr_vec_from_file(cache_dir.join(zpolyf)).unwrap();
@@ -232,14 +272,19 @@ impl SRS {
                         // generate fresh
                         compute_vanishing_polynomial(&tree).unwrap()
                     };
+                    println!("Took {:?} secs to compute_vanishing_polynomial", now.elapsed().as_secs_f32());
                     let tree: FFTree<Fr> = tree.subtree_with_size(num_constraints).clone();
                     write_fr_vec_to_file(cache_dir.join(zpolyf), &vanish_poly.coeffs).unwrap();
                     (tree, vanish_poly)
                 } else {
+                    let now = std::time::Instant::now();
                     let treen = load_tree(treenf, odd_leaf, num_constraints).unwrap();
+                    println!("Took {:?} secs to load_tree  //nf", now.elapsed().as_secs_f32());
                     // cached file should exist
+                    let now = std::time::Instant::now();
                     let z_poly_coeffs = read_fr_vec_from_file(cache_dir.join(zpolyf))
                         .with_context(|| format!("expected pre‑computed {:?}", zpolyf))?;
+                    println!("Took {:?} secs to read z_poly_coeffs", now.elapsed().as_secs_f32());
 
                     if validate_precompute {
                         // Ensure downloaded vanishing polynomial was valid
@@ -264,6 +309,7 @@ impl SRS {
                     (treen, vanish_poly)
                 };
 
+                let now = std::time::Instant::now();
                 let barycentric_weights = if cache_dir.join(barwtsf).exists() {
                     // read from cache if it exists
                     read_fr_vec_from_file(cache_dir.join(barwtsf)).unwrap()
@@ -273,8 +319,10 @@ impl SRS {
                     write_fr_vec_to_file(cache_dir.join(barwtsf), &barycentric_weights)?;
                     barycentric_weights
                 };
+                println!("Took {:?} secs to get barycentric weights", now.elapsed().as_secs_f32());
 
                 // instance(trapdoor) specific and used only for setup, so compute everytime
+                let now = std::time::Instant::now();
                 let lag_basis = compute_lagrange_basis_at_tau(
                     &treen,
                     &vanishing_poly,
@@ -282,18 +330,37 @@ impl SRS {
                     &barycentric_weights,
                 )
                 .unwrap();
+                println!("Took {:?} secs to compute lagrange basis at tau", now.elapsed().as_secs_f32());
 
                 Ok((treen, lag_basis, vanishing_poly))
             };
 
-        let (mut treen, l_tau, z_poly) =
-            init_tree_and_poly_at_tau(TREE_2N, TREE_N, Z_POLY, BAR_WTS, false)?;
+        let now = std::time::Instant::now();
+        let (res_d, res_dp) = join(
+            || init_tree_and_poly_at_tau(TREE_2N, TREE_N, Z_POLY, BAR_WTS, false),
+            || init_tree_and_poly_at_tau(TREE_2ND, TREE_ND, Z_POLYD, BAR_WTSD, true),
+        );
 
-        // drop treen to save memory, will read from file in a couple of steps
-        clear_fftree(&mut treen);
+        let (mut treen, l_tau, z_poly) = res_d?;
+        println!(
+            "Took {:?} secs to init_tree_and_poly_at_tau D",
+            now.elapsed().as_secs_f32()
+        );
 
-        let (mut treend, l_taud, z_polyd) =
-            init_tree_and_poly_at_tau(TREE_2ND, TREE_ND, Z_POLYD, BAR_WTSD, true)?;
+        let (mut treend, l_taud, z_polyd) = res_dp?;
+        println!(
+            "Took {:?} secs to init_tree_and_poly_at_tau D'",
+            now.elapsed().as_secs_f32()
+        );
+
+        println!("r1cs update_to_include_vandermode_matrix_d");
+        let now = std::time::Instant::now();
+        R1CSInstance::update_to_include_vandermode_matrix_d(
+            &mut inst,
+            treen.f.leaves(),
+            num_public_inputs,
+        );
+        println!("Took {:?} secs to update r1cs", now.elapsed().as_secs_f32());
 
         // Pre‑compute domain vanishing polynomials and their inverses ---------
         let prepare_z_inv =
@@ -310,30 +377,20 @@ impl SRS {
                 }
             };
 
-        println!("computing evaluations of vanishing polynomial on other domain");
-        let mut z_vals2_inv = prepare_z_inv(Z_VALS2_INV, &z_poly, &treend)?;
-        clear_fftree(&mut treend);
-
-        // rebuild tree now that some space has been freed
-        treen = if is_fresh_setup {
-            let tree = load_tree(TREE_2N, false, num_constraints * 2).unwrap();
-            let tree: FFTree<Fr> = tree.subtree_with_size(num_constraints).clone();
-            tree
-        } else {
-            load_tree(TREE_N, false, num_constraints).unwrap()
-        };
-
-        println!("r1cs update_to_include_vandermode_matrix_d");
-        R1CSInstance::update_to_include_vandermode_matrix_d(
-            &mut inst,
-            treen.f.leaves(),
-            num_public_inputs,
+        let (res_zvals2_inv, res_zvals2d_inv) = join(
+            || prepare_z_inv(Z_VALS2_INV, &z_poly, &treend),
+            || prepare_z_inv(Z_VALS2D_INV, &z_polyd, &treen),
         );
-
-        let mut z_vals2d_inv = prepare_z_inv(Z_VALS2D_INV, &z_polyd, &treen)?;
+        let mut z_vals2_inv = res_zvals2_inv?;
+        println!("Took {:?} secs to prepare_z_inv D'", now.elapsed().as_secs_f32());
+        let mut z_vals2d_inv = res_zvals2d_inv?;
+        println!("Took {:?} secs to prepare_z_inv D", now.elapsed().as_secs_f32());
+        
+        clear_fftree(&mut treend);
         clear_fftree(&mut treen);
 
         println!("evaluate_lagrage_over_unified_domain_with_precompute");
+        let now = std::time::Instant::now();
         let l_taul = compute_lagrange_basis_at_tau_over_unified_domain(
             trapdoor.tau,
             num_constraints,
@@ -344,14 +401,17 @@ impl SRS {
             &z_vals2_inv,
             &z_vals2d_inv,
         );
+        println!("Took {:?} secs to compute l_taul", now.elapsed().as_secs_f32());
 
         z_vals2_inv.clear();
         z_vals2d_inv.clear();
 
         println!("compute_srs_matrices");
+        let now = std::time::Instant::now();
         let srs_mats = compute_srs_matrices(
             cache_dir, &trapdoor, &z_poly, &mut inst, &l_tau, &l_taud, &l_taul,
         )?;
+        println!("Took {:?} secs to compute_srs_matrices", now.elapsed().as_secs_f32());
 
         Ok(Self {
             g_m: srs_mats.g_m,

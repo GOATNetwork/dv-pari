@@ -8,10 +8,10 @@ use num_bigint::BigUint;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
+use serde::{Deserialize, Serialize};
 use std::os::raw::c_void;
 use std::str::FromStr;
 use xs233_sys::{xsk233_add, xsk233_generator, xsk233_neutral, xsk233_point};
-use serde::{Serialize, Deserialize};
 
 /// FqConfig for Scalar Field of the curve
 #[derive(MontConfig, Debug)]
@@ -100,6 +100,25 @@ pub struct CurvePoint(pub xsk233_point);
 /// Represents a compressed point in curve
 pub type CompressedCurvePoint = [u8; 30];
 
+/// Affine coordinates (x, y) for a curve point over GF(2^233).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AffineCurvePoint {
+    /// Canonical little-endian encoding of the x-coordinate.
+    pub x: [u8; 30],
+    /// Canonical little-endian encoding of the y-coordinate.
+    pub y: [u8; 30],
+}
+
+impl AffineCurvePoint {
+    /// Serialize AffineCurvePoint to 60 byte array
+    pub fn to_bytes(self) -> [u8; 60] {
+        let mut res = [0u8; 60];
+        res[..30].copy_from_slice(&self.x);
+        res[30..].copy_from_slice(&self.y);
+        res
+    }
+}
+
 impl PartialEq for CurvePoint {
     fn eq(&self, other: &Self) -> bool {
         unsafe {
@@ -140,6 +159,20 @@ impl CurvePoint {
             let success = xs233_sys::xsk233_decode(&mut pt2, src.as_mut_ptr() as *mut c_void);
             (CurvePoint(pt2), success != 0)
         }
+    }
+
+    /// Convert an extended point into affine coordinates.
+    pub fn to_affine(&self) -> AffineCurvePoint {
+        let mut x = [0u8; 30];
+        let mut y = [0u8; 30];
+        unsafe {
+            xs233_sys::xsk233_to_affine(
+                &self.0,
+                x.as_mut_ptr() as *mut c_void,
+                y.as_mut_ptr() as *mut c_void,
+            );
+        }
+        AffineCurvePoint { x, y }
     }
 }
 
@@ -223,7 +256,7 @@ mod unit_test {
     use ark_std::rand::thread_rng;
     use xs233_sys::{xsk233_add, xsk233_equals, xsk233_generator, xsk233_neutral};
 
-    use crate::curve::{CurvePoint, point_scalar_mul};
+    use crate::curve::{AffineCurvePoint, CurvePoint, point_scalar_mul, point_scalar_mul_gen};
 
     use super::{Fr, multi_scalar_mul};
 
@@ -279,5 +312,45 @@ mod unit_test {
             let success = xsk233_equals(&pt2, &pt);
             assert!(success != 0);
         }
+    }
+
+    #[test]
+    fn test_neutral_affine_coordinates() {
+        unsafe {
+            let neutral = CurvePoint(xsk233_neutral);
+            let coords = neutral.to_affine();
+            assert_eq!(coords.x, [0u8; 30]);
+            assert_eq!(coords.y, [0u8; 30]);
+        }
+    }
+
+    #[test]
+    fn test_generator_affine_coordinates_stability() {
+        unsafe {
+            let generator = CurvePoint(xsk233_generator);
+            let coords = generator.to_affine();
+            let expected = AffineCurvePoint {
+                x: [
+                    230, 27, 170, 221, 203, 229, 80, 168, 84, 191, 102, 25, 126, 239, 36, 87, 6,
+                    185, 133, 101, 71, 236, 61, 251, 208, 118, 39, 185, 236, 1,
+                ],
+                y: [
+                    95, 80, 37, 40, 127, 69, 79, 111, 112, 131, 143, 47, 36, 27, 117, 132, 108, 4,
+                    171, 16, 234, 249, 193, 248, 58, 242, 198, 41, 87, 0,
+                ],
+            };
+            assert_eq!(coords, expected);
+        }
+    }
+
+    #[test]
+    fn test_random_point_affine_dump() {
+        let mut rng = thread_rng();
+        let scalar = Fr::rand(&mut rng);
+        let point = point_scalar_mul_gen(scalar);
+        let coords = point.to_affine();
+        println!("random_point_x={:?}", coords.x);
+        println!("random_point_y={:?}", coords.y);
+        assert!(coords.x.iter().any(|&b| b != 0) || coords.y.iter().any(|&b| b != 0));
     }
 }

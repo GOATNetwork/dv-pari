@@ -21,9 +21,7 @@
 
 use blake3::Hasher;
 use num_bigint::BigUint;
-use rayon::{
-    iter::{IntoParallelIterator, ParallelIterator},
-};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{
     fs::File,
     io::{self, BufReader, Read},
@@ -117,9 +115,7 @@ pub(crate) struct SparseR1CSTable {
 }
 
 /// Parse a gnark SP‑1 sparse‑R1CS dump from a file
-pub(crate) fn load_sparse_r1cs_from_file<R: Read>(
-    mut reader: R,
-) -> io::Result<SparseR1CSTable> {
+pub(crate) fn load_sparse_r1cs_from_file<R: Read>(mut reader: R) -> io::Result<SparseR1CSTable> {
     // ───────── 1. coefficients (exactly n_coeffs × 32 bytes) ─────────────
     let n_coeffs = reader.read_u32::<LittleEndian>()?;
     let mut coeff_table = Vec::with_capacity(n_coeffs as usize);

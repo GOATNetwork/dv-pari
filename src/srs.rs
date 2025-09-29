@@ -22,14 +22,14 @@ use anyhow::{Context, Result};
 use ark_ff::{Field, One, Zero};
 use ark_poly::Polynomial;
 use ark_poly::univariate::DensePolynomial;
-use ark_std::vec::Vec;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::vec::Vec;
 use ecfft::FFTree;
 use ecfft::utils::BinaryTree;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::join;
 use std::fs::File;
 use std::path::Path;
-use rayon::join;
 
 /// Structured Reference String
 #[derive(Clone, Debug)]
@@ -260,7 +260,10 @@ impl SRS {
                 let (treen, vanishing_poly) = if is_fresh_setup {
                     let now = std::time::Instant::now();
                     let tree = load_tree(tree2nf, odd_leaf, num_constraints * 2).unwrap();
-                    println!("Took {:?} secs to load_tree  //2nf", now.elapsed().as_secs_f32());
+                    println!(
+                        "Took {:?} secs to load_tree  //2nf",
+                        now.elapsed().as_secs_f32()
+                    );
                     let now = std::time::Instant::now();
                     let vanish_poly: DensePolynomial<Fr> = if cache_dir.join(zpolyf).exists() {
                         // read cached file if it exists from previous run
@@ -272,19 +275,28 @@ impl SRS {
                         // generate fresh
                         compute_vanishing_polynomial(&tree).unwrap()
                     };
-                    println!("Took {:?} secs to compute_vanishing_polynomial", now.elapsed().as_secs_f32());
+                    println!(
+                        "Took {:?} secs to compute_vanishing_polynomial",
+                        now.elapsed().as_secs_f32()
+                    );
                     let tree: FFTree<Fr> = tree.subtree_with_size(num_constraints).clone();
                     write_fr_vec_to_file(cache_dir.join(zpolyf), &vanish_poly.coeffs).unwrap();
                     (tree, vanish_poly)
                 } else {
                     let now = std::time::Instant::now();
                     let treen = load_tree(treenf, odd_leaf, num_constraints).unwrap();
-                    println!("Took {:?} secs to load_tree  //nf", now.elapsed().as_secs_f32());
+                    println!(
+                        "Took {:?} secs to load_tree  //nf",
+                        now.elapsed().as_secs_f32()
+                    );
                     // cached file should exist
                     let now = std::time::Instant::now();
                     let z_poly_coeffs = read_fr_vec_from_file(cache_dir.join(zpolyf))
                         .with_context(|| format!("expected pre‑computed {:?}", zpolyf))?;
-                    println!("Took {:?} secs to read z_poly_coeffs", now.elapsed().as_secs_f32());
+                    println!(
+                        "Took {:?} secs to read z_poly_coeffs",
+                        now.elapsed().as_secs_f32()
+                    );
 
                     if validate_precompute {
                         // Ensure downloaded vanishing polynomial was valid
@@ -319,7 +331,10 @@ impl SRS {
                     write_fr_vec_to_file(cache_dir.join(barwtsf), &barycentric_weights)?;
                     barycentric_weights
                 };
-                println!("Took {:?} secs to get barycentric weights", now.elapsed().as_secs_f32());
+                println!(
+                    "Took {:?} secs to get barycentric weights",
+                    now.elapsed().as_secs_f32()
+                );
 
                 // instance(trapdoor) specific and used only for setup, so compute everytime
                 let now = std::time::Instant::now();
@@ -330,7 +345,10 @@ impl SRS {
                     &barycentric_weights,
                 )
                 .unwrap();
-                println!("Took {:?} secs to compute lagrange basis at tau", now.elapsed().as_secs_f32());
+                println!(
+                    "Took {:?} secs to compute lagrange basis at tau",
+                    now.elapsed().as_secs_f32()
+                );
 
                 Ok((treen, lag_basis, vanishing_poly))
             };
@@ -382,10 +400,16 @@ impl SRS {
             || prepare_z_inv(Z_VALS2D_INV, &z_polyd, &treen),
         );
         let mut z_vals2_inv = res_zvals2_inv?;
-        println!("Took {:?} secs to prepare_z_inv D'", now.elapsed().as_secs_f32());
+        println!(
+            "Took {:?} secs to prepare_z_inv D'",
+            now.elapsed().as_secs_f32()
+        );
         let mut z_vals2d_inv = res_zvals2d_inv?;
-        println!("Took {:?} secs to prepare_z_inv D", now.elapsed().as_secs_f32());
-        
+        println!(
+            "Took {:?} secs to prepare_z_inv D",
+            now.elapsed().as_secs_f32()
+        );
+
         clear_fftree(&mut treend);
         clear_fftree(&mut treen);
 
@@ -401,7 +425,10 @@ impl SRS {
             &z_vals2_inv,
             &z_vals2d_inv,
         );
-        println!("Took {:?} secs to compute l_taul", now.elapsed().as_secs_f32());
+        println!(
+            "Took {:?} secs to compute l_taul",
+            now.elapsed().as_secs_f32()
+        );
 
         z_vals2_inv.clear();
         z_vals2d_inv.clear();
@@ -411,7 +438,10 @@ impl SRS {
         let srs_mats = compute_srs_matrices(
             cache_dir, &trapdoor, &z_poly, &mut inst, &l_tau, &l_taud, &l_taul,
         )?;
-        println!("Took {:?} secs to compute_srs_matrices", now.elapsed().as_secs_f32());
+        println!(
+            "Took {:?} secs to compute_srs_matrices",
+            now.elapsed().as_secs_f32()
+        );
 
         Ok(Self {
             g_m: srs_mats.g_m,

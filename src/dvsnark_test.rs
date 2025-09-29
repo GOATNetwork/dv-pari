@@ -10,7 +10,9 @@
 mod tests {
     use crate::artifacts::{R1CS_CONSTRAINTS_FILE, R1CS_WITNESS_FILE};
     use crate::curve::Fr;
-    use crate::proving::{Proof, prover_prepares_precomputes, dump_proof_to_file, read_proof_from_file};
+    use crate::proving::{
+        Proof, dump_proof_to_file, prover_prepares_precomputes, read_proof_from_file,
+    };
     use anyhow::Context;
     use ark_ff::Field;
     use ark_std::vec::Vec;
@@ -21,8 +23,8 @@ mod tests {
     use crate::gnark_r1cs::{Row, SparseR1CSTable, Term};
     use crate::srs::{SRS, Trapdoor};
 
-    use ark_std::rand::SeedableRng;
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+    use ark_std::rand::SeedableRng;
 
     use rand_chacha::ChaCha20Rng;
     use std::time::Instant;
@@ -202,7 +204,7 @@ mod tests {
         let public_inputs = wit_fr[1..1 + num_public_inputs].to_vec();
 
         let mut buf = Vec::new();
-        public_inputs.serialize_compressed(&mut buf).unwrap();  // or serialize_uncompressed
+        public_inputs.serialize_compressed(&mut buf).unwrap(); // or serialize_uncompressed
         let mut file = File::create("groth16/public_inputs.bin").unwrap();
         file.write_all(&buf).unwrap();
 
@@ -230,7 +232,7 @@ mod tests {
             true,
             true,
         )
-            .unwrap();
+        .unwrap();
 
         let elapsed = now.elapsed();
         println!("Took {} seconds to setup SRS", elapsed.as_secs());
@@ -264,7 +266,5 @@ mod tests {
             result,
             "Verification should succeed for valid multi-constraint witness"
         );
-
-
     }
 }

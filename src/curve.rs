@@ -97,25 +97,31 @@ impl FrBits {
 #[derive(Debug, Clone, Copy)]
 pub struct CurvePoint(pub xsk233_point);
 
-/// Represents a compressed point in curve
-pub type CompressedCurvePoint = [u8; 30];
-
-/// Affine coordinates (x, y) for a curve point over GF(2^233).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AffineCurvePoint {
+/// Lopez–Dahab λ coordinates (x, λ) for a curve point over GF(2^233).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LambdaCurvePoint {
     /// Canonical little-endian encoding of the x-coordinate.
     pub x: [u8; 30],
-    /// Canonical little-endian encoding of the y-coordinate.
-    pub y: [u8; 30],
+    /// Canonical little-endian encoding of the λ (= s) coordinate.
+    pub lambda: [u8; 30],
 }
 
-impl AffineCurvePoint {
-    /// Serialize AffineCurvePoint to 60 byte array
+impl LambdaCurvePoint {
+    /// Serialize Lopez–Dahab λ coordinates to a 60 byte array.
     pub fn to_bytes(self) -> [u8; 60] {
         let mut res = [0u8; 60];
         res[..30].copy_from_slice(&self.x);
-        res[30..].copy_from_slice(&self.y);
+        res[30..].copy_from_slice(&self.lambda);
         res
+    }
+
+    /// Deserialize Lopez–Dahab λ coordinates from a 60 byte array.
+    pub fn from_bytes(bytes: &[u8; 60]) -> Self {
+        let mut x = [0u8; 30];
+        let mut lambda = [0u8; 30];
+        x.copy_from_slice(&bytes[..30]);
+        lambda.copy_from_slice(&bytes[30..]);
+        LambdaCurvePoint { x, lambda }
     }
 }
 
@@ -142,37 +148,42 @@ impl CurvePoint {
         }
     }
 
-    /// Serialize CurvePoint to 30 byte array
-    pub fn to_bytes(self) -> CompressedCurvePoint {
-        unsafe {
-            let pt = self.0;
-            let mut dst = [0u8; 30];
-            xs233_sys::xsk233_encode(dst.as_mut_ptr() as *mut c_void, &pt);
-            dst
-        }
+    /// Serialize CurvePoint to Lopez–Dahab λ bytes (x || λ, 60 bytes).
+    pub fn to_bytes(self) -> [u8; 60] {
+        self.to_lambda().to_bytes()
     }
 
-    /// Deserialize CurvePoint from 30 byte array
-    pub fn from_bytes(src: &mut CompressedCurvePoint) -> (CurvePoint, bool) {
-        unsafe {
-            let mut pt2 = xsk233_neutral;
-            let success = xs233_sys::xsk233_decode(&mut pt2, src.as_mut_ptr() as *mut c_void);
-            (CurvePoint(pt2), success != 0)
-        }
+    /// Deserialize a CurvePoint from Lopez–Dahab λ bytes (x || λ, 60 bytes).
+    pub fn from_bytes(src: &[u8; 60]) -> (CurvePoint, bool) {
+        let lambda_coords = LambdaCurvePoint::from_bytes(src);
+        CurvePoint::from_lambda(&lambda_coords)
     }
 
-    /// Convert an extended point into affine coordinates.
-    pub fn to_affine(&self) -> AffineCurvePoint {
+    /// Convert an extended point into Lopez–Dahab λ coordinates.
+    pub fn to_lambda(&self) -> LambdaCurvePoint {
         let mut x = [0u8; 30];
-        let mut y = [0u8; 30];
+        let mut lambda = [0u8; 30];
         unsafe {
             xs233_sys::xsk233_to_affine(
                 &self.0,
                 x.as_mut_ptr() as *mut c_void,
-                y.as_mut_ptr() as *mut c_void,
+                lambda.as_mut_ptr() as *mut c_void,
             );
         }
-        AffineCurvePoint { x, y }
+        LambdaCurvePoint { x, lambda }
+    }
+
+    /// Reconstruct a [`CurvePoint`] from Lopez–Dahab λ coordinates.
+    pub fn from_lambda(coords: &LambdaCurvePoint) -> (CurvePoint, bool) {
+        unsafe {
+            let mut pt = xsk233_neutral;
+            let success = xs233_sys::xsk233_from_affine(
+                &mut pt,
+                coords.x.as_ptr() as *const c_void,
+                coords.lambda.as_ptr() as *const c_void,
+            );
+            (CurvePoint(pt), success != 0)
+        }
     }
 }
 
@@ -250,13 +261,11 @@ fn fr_to_le_bytes(fr: &Fr) -> Vec<u8> {
 
 #[cfg(test)]
 mod unit_test {
-    use std::os::raw::c_void;
-
     use ark_ff::{AdditiveGroup, UniformRand};
     use ark_std::rand::thread_rng;
     use xs233_sys::{xsk233_add, xsk233_equals, xsk233_generator, xsk233_neutral};
 
-    use crate::curve::{AffineCurvePoint, CurvePoint, point_scalar_mul, point_scalar_mul_gen};
+    use crate::curve::{CurvePoint, LambdaCurvePoint, point_scalar_mul, point_scalar_mul_gen};
 
     use super::{Fr, multi_scalar_mul};
 
@@ -301,42 +310,38 @@ mod unit_test {
     #[test]
     // Verifies that a CurvePoint is recovered after serialize-then-deserialize
     fn test_curve_point_to_bytes() {
-        unsafe {
-            let pt = xsk233_generator;
-            let mut dst = [0u8; 30];
-            xs233_sys::xsk233_encode(dst.as_mut_ptr() as *mut c_void, &pt);
-
-            let mut pt2 = xsk233_neutral;
-            let success = xs233_sys::xsk233_decode(&mut pt2, dst.as_mut_ptr() as *mut c_void);
-            assert!(success != 0);
-            let success = xsk233_equals(&pt2, &pt);
-            assert!(success != 0);
-        }
+        let generator = CurvePoint::generator();
+        let bytes = generator.to_bytes();
+        let (decoded, valid) = CurvePoint::from_bytes(&bytes);
+        assert!(valid);
+        assert_eq!(decoded, generator);
     }
 
     #[test]
-    fn test_neutral_affine_coordinates() {
+    fn test_neutral_lambda_coordinates() {
         unsafe {
             let neutral = CurvePoint(xsk233_neutral);
-            let coords = neutral.to_affine();
+            let coords = neutral.to_lambda();
             assert_eq!(coords.x, [0u8; 30]);
-            assert_eq!(coords.y, [0u8; 30]);
+            let mut expected_lambda = [0u8; 30];
+            expected_lambda[0] = 1;
+            assert_eq!(coords.lambda, expected_lambda);
         }
     }
 
     #[test]
-    fn test_generator_affine_coordinates_stability() {
+    fn test_generator_lambda_coordinates_stability() {
         unsafe {
             let generator = CurvePoint(xsk233_generator);
-            let coords = generator.to_affine();
-            let expected = AffineCurvePoint {
+            let coords = generator.to_lambda();
+            let expected = LambdaCurvePoint {
                 x: [
                     230, 27, 170, 221, 203, 229, 80, 168, 84, 191, 102, 25, 126, 239, 36, 87, 6,
                     185, 133, 101, 71, 236, 61, 251, 208, 118, 39, 185, 236, 1,
                 ],
-                y: [
-                    95, 80, 37, 40, 127, 69, 79, 111, 112, 131, 143, 47, 36, 27, 117, 132, 108, 4,
-                    171, 16, 234, 249, 193, 248, 58, 242, 198, 41, 87, 0,
+                lambda: [
+                    153, 154, 125, 54, 191, 224, 249, 102, 193, 150, 111, 7, 80, 50, 25, 247, 157,
+                    102, 243, 253, 252, 71, 170, 91, 78, 77, 59, 255, 237, 0,
                 ],
             };
             assert_eq!(coords, expected);
@@ -344,13 +349,35 @@ mod unit_test {
     }
 
     #[test]
-    fn test_random_point_affine_dump() {
+    fn test_lambda_roundtrip_generator() {
+        unsafe {
+            let generator = CurvePoint(xsk233_generator);
+            let coords = generator.to_lambda();
+            let (recovered, valid) = CurvePoint::from_lambda(&coords);
+            assert!(valid);
+            assert_eq!(recovered, generator);
+        }
+    }
+
+    #[test]
+    fn test_lambda_roundtrip_neutral() {
+        unsafe {
+            let neutral = CurvePoint(xsk233_neutral);
+            let coords = neutral.to_lambda();
+            let (recovered, valid) = CurvePoint::from_lambda(&coords);
+            assert!(valid);
+            assert_eq!(recovered, neutral);
+        }
+    }
+
+    #[test]
+    fn test_random_point_lambda_dump() {
         let mut rng = thread_rng();
         let scalar = Fr::rand(&mut rng);
         let point = point_scalar_mul_gen(scalar);
-        let coords = point.to_affine();
+        let coords = point.to_lambda();
         println!("random_point_x={:?}", coords.x);
-        println!("random_point_y={:?}", coords.y);
-        assert!(coords.x.iter().any(|&b| b != 0) || coords.y.iter().any(|&b| b != 0));
+        println!("random_point_lambda={:?}", coords.lambda);
+        assert!(coords.x.iter().any(|&b| b != 0) || coords.lambda.iter().any(|&b| b != 0));
     }
 }

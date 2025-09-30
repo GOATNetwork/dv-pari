@@ -858,7 +858,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "xs233-sys"
 version = "0.1.0"
-source = "git+https://github.com/blake-pro/xs233-sys.git#5475bf41763bbc9a04a1bb421384540381027a01"
+source = "git+https://github.com/blake-pro/xs233-sys.git#d3902567273aba4992ba651bdacbaf4c04954cf6"
 dependencies = [
  "bindgen",
  "cc",

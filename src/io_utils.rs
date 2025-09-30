@@ -70,7 +70,7 @@ pub(crate) fn write_fr_vec_to_file<P: AsRef<Path>>(path: P, points: &[Fr]) -> an
 
 /// Serialises a slice of [`CurvePoint`]s to binary `path`.
 ///
-/// The wire format matches [`write_fr_vec_to_file`], but uses the point's 30‑byte compressed
+/// The wire format matches [`write_fr_vec_to_file`], but uses the point's 60-byte Lopez–Dahab λ
 /// representation returned by [`CurvePoint::to_bytes`].
 ///
 /// # Arguments
@@ -90,7 +90,7 @@ pub(crate) fn write_point_vec_to_file<P: AsRef<Path>>(
     let len = points.len() as u64;
     f.write_all(&len.to_le_bytes())?;
 
-    // 2. points (compressed)
+    // 2. points (λ-encoded)
     let serialized_points: Vec<Result<Vec<u8>, anyhow::Error>> = points
         .par_iter()
         .map(|p| {
@@ -144,7 +144,7 @@ pub(crate) fn read_fr_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<V
     let expected_data_end = current_pos + (len * FR_UNCOMPRESSED_SIZE);
     if mmap.len() < expected_data_end {
         return Err(anyhow::anyhow!(
-            "File too short for expected point data (compressed)"
+            "File too short for expected point data (lambda encoding)"
         ));
     }
     let all_point_data_slice = &mmap[current_pos..expected_data_end];
@@ -164,7 +164,7 @@ pub(crate) fn read_fr_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<V
 
     if points.len() != len {
         return Err(anyhow::anyhow!(
-            "Deserialization (mmap, compressed) resulted in incorrect number of points. Expected {}, got {}.",
+            "Deserialization (mmap, lambda) resulted in incorrect number of points. Expected {}, got {}.",
             len,
             points.len()
         ));
@@ -188,7 +188,7 @@ pub(crate) fn read_point_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Resul
     let file = File::open(path).context("Failed to open file")?;
     // Safety: Creating a memory map is unsafe. Ensure file isn't truncated/modified while mapped.
     let mmap = unsafe { Mmap::map(&file)? };
-    const PT_COMPRESSED_SIZE: usize = 30;
+    const PT_LAMBDA_SIZE: usize = 60;
     let mut current_pos = 0;
 
     // 1. Length prefix from mmap
@@ -205,7 +205,7 @@ pub(crate) fn read_point_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Resul
     }
 
     // 2. Point data from mmap
-    let expected_data_end = current_pos + (len * PT_COMPRESSED_SIZE);
+    let expected_data_end = current_pos + (len * PT_LAMBDA_SIZE);
     if mmap.len() < expected_data_end {
         return Err(anyhow::anyhow!(
             "File too short for expected point data (compressed)"
@@ -215,13 +215,16 @@ pub(crate) fn read_point_vec_from_file<P: AsRef<Path>>(path: P) -> anyhow::Resul
 
     // 3. Parallelize deserialization from the mmap slice
     let points_results: Vec<Result<CurvePoint, anyhow::Error>> = all_point_data_slice
-        .par_chunks_exact(PT_COMPRESSED_SIZE)
+        .par_chunks_exact(PT_LAMBDA_SIZE)
         .map(|chunk| {
-            let cursor = Cursor::new(chunk);
-            let mut x: [u8; 30] = cursor.into_inner().try_into().unwrap();
-            let (pt, valid) = CurvePoint::from_bytes(&mut x);
-            assert!(valid);
-            Ok(pt)
+            let mut bytes = [0u8; PT_LAMBDA_SIZE];
+            bytes.copy_from_slice(chunk);
+            let (pt, valid) = CurvePoint::from_bytes(&bytes);
+            if !valid {
+                Err(anyhow::anyhow!("Invalid lambda encoding for curve point"))
+            } else {
+                Ok(pt)
+            }
         })
         .collect();
 

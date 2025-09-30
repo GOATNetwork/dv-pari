@@ -4,7 +4,7 @@ use crate::artifacts::{
     BAR_WTS, R1CS_CONSTRAINTS_FILE, SRS_G_K_0, SRS_G_K_1, SRS_G_K_2, SRS_G_M, SRS_G_Q, TREE_2N,
     TREE_N, TREE_ND, Z_POLY, Z_VALS2_INV,
 };
-use crate::curve::{CompressedCurvePoint, CurvePoint, Fr, FrBits, multi_scalar_mul};
+use crate::curve::{CurvePoint, Fr, FrBits, LambdaCurvePoint, multi_scalar_mul};
 use crate::ec_fft::{
     build_sect_ecfft_tree, compute_barycentric_weights,
     evaluate_poly_at_alpha_using_barycentric_weights, evaluate_vanishing_poly_at_domain,
@@ -32,20 +32,20 @@ use std::path::Path;
 ///
 /// # Fields
 ///
-/// * `commit_p`: Commitment to Witness and Quotient Polynomials
-/// * `kzg_k`: Commitment to polynomial openings at Fiat-Shamir challenge
+/// * `commit_p`: Commitment to Witness and Quotient Polynomials (Lopez–Dahab λ form)
+/// * `kzg_k`: Commitment to polynomial openings at Fiat-Shamir challenge (λ form)
 /// * `a0`: Witness polynomial a(X) evaluated at challenge
 /// * `b0`: Witness polynomial b(X) evaluated at challenge
 /// * `i0`: Public Input polynomial i(X) evaluated at challenge
 ///
 /// We require the proof to be of small size, so we represent the data in compressed form
-/// Total Size = 2 * (Compressed Curve Point) 30 bytes + 3 * (Scalr Field ELement) 29 bytes = 147 bytes
+/// Total Size = 2 * (Lambda Curve Point) 60 bytes + 2 * (Scalar Field Element) 29 bytes = 178 bytes
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proof {
-    /// commit_p
-    pub commit_p: CompressedCurvePoint,
-    /// kzg_k
-    pub kzg_k: CompressedCurvePoint,
+    /// commit_p encoded as Lopez–Dahab λ coordinates
+    pub commit_p: LambdaCurvePoint,
+    /// kzg_k encoded as Lopez–Dahab λ coordinates
+    pub kzg_k: LambdaCurvePoint,
     /// a0
     pub a0: FrBits,
     /// b0
@@ -154,7 +154,7 @@ impl Transcript {
         self.witness_commitment_hash = {
             let buf: Vec<u8> = witness_commitment
                 .iter()
-                .flat_map(|cp| cp.to_affine().to_bytes())
+                .flat_map(|cp| cp.to_lambda().to_bytes())
                 .collect();
             let buf_hash = blake3::hash(&buf);
             Some(buf_hash)
@@ -696,8 +696,8 @@ impl Proof {
         let kzg_k = multi_scalar_mul(&srs_s_k, &srs_g_k);
 
         Self {
-            commit_p: commit_p.to_bytes(),
-            kzg_k: kzg_k.to_bytes(),
+            commit_p: commit_p.to_lambda(),
+            kzg_k: kzg_k.to_lambda(),
             a0: FrBits::from_fr(a0),
             b0: FrBits::from_fr(b0),
         }
@@ -712,11 +712,13 @@ impl Proof {
 
         let mut commit_p: Vec<bool> = self
             .commit_p
+            .to_bytes()
             .iter()
             .flat_map(|x| u8_to_bits_le(*x).to_vec())
             .collect();
         let mut kzg_k: Vec<bool> = self
             .kzg_k
+            .to_bytes()
             .iter()
             .flat_map(|x| u8_to_bits_le(*x).to_vec())
             .collect();
@@ -747,9 +749,9 @@ impl Proof {
 
         let mut offset = 0;
 
-        // commit_p: 30 bytes = 240 bits
-        let commit_p: [u8; 30] = {
-            let mut arr = [0u8; 30];
+        // commit_p (x || λ): 60 bytes = 480 bits
+        let commit_p: [u8; 60] = {
+            let mut arr = [0u8; 60];
             for arr_i in &mut arr {
                 *arr_i = bits_le_to_u8(&bits[offset..offset + 8]);
                 offset += 8;
@@ -757,9 +759,9 @@ impl Proof {
             arr
         };
 
-        // kzg_k: 30 bytes = 240 bits
-        let kzg_k: [u8; 30] = {
-            let mut arr = [0u8; 30];
+        // kzg_k (x || λ): 60 bytes = 480 bits
+        let kzg_k: [u8; 60] = {
+            let mut arr = [0u8; 60];
             for arr_i in &mut arr {
                 *arr_i = bits_le_to_u8(&bits[offset..offset + 8]);
                 offset += 8;
@@ -778,8 +780,8 @@ impl Proof {
         let b0 = FrBits(b0_bits);
 
         Proof {
-            commit_p,
-            kzg_k,
+            commit_p: LambdaCurvePoint::from_bytes(&commit_p),
+            kzg_k: LambdaCurvePoint::from_bytes(&kzg_k),
             a0,
             b0,
         }
